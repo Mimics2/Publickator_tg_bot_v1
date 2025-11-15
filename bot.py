@@ -56,11 +56,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT,
-            media_type TEXT,  # text, photo, video, document
+            media_type TEXT,
             media_file_id TEXT,
             schedule_time TIMESTAMP,
             channel_id TEXT,
-            status TEXT DEFAULT 'scheduled',  # scheduled, published, cancelled
+            status TEXT DEFAULT 'scheduled',
             created_by INTEGER,
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -165,7 +165,8 @@ def get_admins():
     return admins
 
 def is_admin(user_id: int):
-    return user_id in ADMIN_IDS or user_id in [admin[0] for admin in get_admins()]
+    admins_list = [admin[0] for admin in get_admins()]
+    return user_id in ADMIN_IDS or user_id in admins_list
 
 # Клавиатуры
 def get_main_keyboard():
@@ -194,7 +195,6 @@ def get_channels_keyboard(action: str = "select"):
 
 def get_time_keyboard():
     keyboard = []
-    # Добавляем кнопки для быстрого выбора времени
     times = [
         ("Через 15 мин", 15),
         ("Через 1 час", 60),
@@ -284,7 +284,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         minutes = int(data.replace("time_", ""))
         schedule_time = datetime.now() + timedelta(minutes=minutes)
         
-        # Сохраняем пост в базу
         post_id = add_post(
             content=context.user_data['post_content'],
             media_type=context.user_data.get('media_type', 'text'),
@@ -302,7 +301,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📄 Тип: {context.user_data.get('media_type', 'текст')}",
                 reply_markup=get_main_keyboard()
             )
-            # Очищаем временные данные
             context.user_data.clear()
         else:
             await query.edit_message_text(
@@ -322,7 +320,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "📅 Запланированные посты:\n\n"
         for post in posts:
             post_id, content, schedule_time, channel_id, channel_name, status = post
-            schedule_dt = datetime.strptime(schedule_time, '%Y-%m-%d %H:%M:%S')
+            if isinstance(schedule_time, str):
+                schedule_dt = datetime.strptime(schedule_time, '%Y-%m-%d %H:%M:%S')
+            else:
+                schedule_dt = schedule_time
             text += f"📝 ID: {post_id}\n"
             text += f"📢 Канал: {channel_name}\n"
             text += f"⏰ Время: {schedule_dt.strftime('%d.%m.%Y %H:%M')}\n"
@@ -354,7 +355,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"👑 Главные администраторы (по ID): {', '.join(map(str, ADMIN_IDS))}\n\n"
         
         for admin_id, username in admins:
-            if admin_id not in ADMIN_IDS:  # Не показываем главных админов в списке
+            if admin_id not in ADMIN_IDS:
                 text += f"👤 {username or 'Без имени'} (ID: {admin_id})\n"
         
         keyboard = [
@@ -404,8 +405,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('waiting_for_channel'):
         text = message.text.strip()
         if text.startswith('@'):
-            # Здесь можно добавить логику для добавления канала по username
-            # Но для этого нужно получить chat_id по username, что сложнее
             await message.reply_text(
                 "❌ Добавление по username временно недоступно. "
                 "Пожалуйста, перешлите сообщение из канала.",
@@ -424,7 +423,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             new_admin_id = int(message.text)
             
-            # Не позволяем добавлять главных админов
             if new_admin_id in ADMIN_IDS:
                 await message.reply_text(
                     "❌ Этот пользователь уже является главным администратором.",
@@ -432,7 +430,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            # Проверяем, что пользователь существует
             try:
                 user = await context.bot.get_chat(new_admin_id)
                 username = user.username or user.first_name or "Без имени"
@@ -498,7 +495,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         preview_text += "⏰ Выберите время публикации:"
         
-        # Отправляем предпросмотр
         if media_type == 'text':
             await message.reply_text(preview_text, reply_markup=get_time_keyboard())
         elif media_type == 'photo':
@@ -523,7 +519,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for_content'] = False
         return
     
-    # Если сообщение не обработано другими обработчиками
     await message.reply_text(
         "Выберите действие:",
         reply_markup=get_main_keyboard()
@@ -570,7 +565,6 @@ async def publish_scheduled_posts(context: ContextTypes.DEFAULT_TYPE):
                     caption=content
                 )
             
-            # Помечаем пост как опубликованный
             cursor.execute(
                 'UPDATE posts SET status = "published" WHERE id = ?',
                 (post_id,)
@@ -581,7 +575,6 @@ async def publish_scheduled_posts(context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             logger.error(f"Error publishing post {post_id}: {e}")
-            # Помечаем пост как ошибочный
             cursor.execute(
                 'UPDATE posts SET status = "error" WHERE id = ?',
                 (post_id,)
@@ -591,11 +584,9 @@ async def publish_scheduled_posts(context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 async def post_init(application: Application):
-    # Добавляем главных администраторов при запуске
     for admin_id in ADMIN_IDS:
         add_admin(admin_id, "Главный администратор", admin_id)
     
-    # Устанавливаем команды бота
     commands = [
         BotCommand("start", "Запустить бота"),
     ]
@@ -611,27 +602,21 @@ def main():
         logger.error("ADMIN_IDS не установлены!")
         return
     
-    # Инициализация базы данных
     init_db()
     
-    # Создание приложения
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     
-    # Добавление обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.ALL, handle_message))
     
-    # Добавление job для публикации постов (каждую минуту)
     application.job_queue.run_repeating(
         publish_scheduled_posts, 
-        interval=60,  # 60 секунд
+        interval=60,
         first=10
     )
     
-    # Запуск бота для Railway
     if WEBHOOK_URL:
-        # Webhook режим для Railway
         logger.info("Starting bot in webhook mode...")
         application.run_webhook(
             listen="0.0.0.0",
@@ -640,7 +625,6 @@ def main():
             webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
         )
     else:
-        # Polling режим для разработки
         logger.info("Starting bot in polling mode...")
         application.run_polling()
 
