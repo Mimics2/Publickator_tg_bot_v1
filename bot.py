@@ -17,7 +17,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 try:
     ADMIN_ID = int(os.getenv('ADMIN_ID', '123456789'))
 except:
-    ADMIN_ID = 123456789  # Замените на ваш реальный ID
+    ADMIN_ID = 6646433980 # Замените на ваш реальный ID
 
 logger.info(f"Bot started with ADMIN_ID: {ADMIN_ID}")
 
