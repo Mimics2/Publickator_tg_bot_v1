@@ -35,12 +35,10 @@ logger = logging.getLogger(__name__)
 
 # Инициализация базы данных
 def init_db():
-    # Используем абсолютный путь для Railway
     db_path = os.path.join(os.getcwd(), 'bot.db')
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cursor = conn.cursor()
     
-    # Таблица каналов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +49,6 @@ def init_db():
         )
     ''')
     
-    # Таблица постов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,7 +63,6 @@ def init_db():
         )
     ''')
     
-    # Таблица администраторов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS admins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -592,6 +588,24 @@ async def post_init(application: Application):
     ]
     await application.bot.set_my_commands(commands)
 
+# Альтернативная система публикации постов без JobQueue
+async def check_and_publish_posts(application: Application):
+    """Альтернативная функция для проверки и публикации постов"""
+    while True:
+        try:
+            # Создаем контекст вручную
+            class MockContext:
+                def __init__(self, bot):
+                    self.bot = bot
+            
+            context = MockContext(application.bot)
+            await publish_scheduled_posts(context)
+        except Exception as e:
+            logger.error(f"Error in check_and_publish_posts: {e}")
+        
+        # Ждем 60 секунд перед следующей проверкой
+        await asyncio.sleep(60)
+
 # Основная функция
 def main():
     if not BOT_TOKEN:
@@ -604,17 +618,30 @@ def main():
     
     init_db()
     
-    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    # Создаем Application с JobQueue
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.ALL, handle_message))
     
-    application.job_queue.run_repeating(
-        publish_scheduled_posts, 
-        interval=60,
-        first=10
-    )
+    # Запускаем фоновую задачу для публикации постов
+    if hasattr(application, 'job_queue') and application.job_queue is not None:
+        application.job_queue.run_repeating(
+            publish_scheduled_posts, 
+            interval=60,
+            first=10
+        )
+        logger.info("JobQueue initialized successfully")
+    else:
+        logger.warning("JobQueue not available, using alternative method")
+        # Альтернативный метод без JobQueue
+        asyncio.get_event_loop().create_task(check_and_publish_posts(application))
     
     if WEBHOOK_URL:
         logger.info("Starting bot in webhook mode...")
