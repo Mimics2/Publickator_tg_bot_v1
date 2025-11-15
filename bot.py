@@ -1,17 +1,29 @@
 import os
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Настройки
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '123456789'))  # Ваш ID
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+
+# Получаем ADMIN_ID из переменных окружения, если нет - используем дефолтный
+try:
+    ADMIN_ID = int(os.getenv('ADMIN_ID', '123456789'))
+except:
+    ADMIN_ID = 123456789  # Замените на ваш реальный ID
+
+logger.info(f"Bot started with ADMIN_ID: {ADMIN_ID}")
 
 # База данных
 def init_db():
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -35,14 +47,14 @@ def init_db():
     conn.close()
 
 def add_channel(channel_id, channel_name):
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('INSERT OR REPLACE INTO channels VALUES (?, ?)', (channel_id, channel_name))
     conn.commit()
     conn.close()
 
 def get_channels():
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('SELECT channel_id, channel_name FROM channels')
     channels = cursor.fetchall()
@@ -50,7 +62,7 @@ def get_channels():
     return channels
 
 def add_post(content, schedule_time, channel_id):
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('INSERT INTO posts (content, schedule_time, channel_id) VALUES (?, ?, ?)',
                   (content, schedule_time, channel_id))
@@ -87,8 +99,11 @@ def time_keyboard():
 
 # Команды бота
 async def start(update: Update, context):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Доступ запрещен")
+    user_id = update.effective_user.id
+    logger.info(f"User {user_id} tried to start bot")
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Доступ запрещен. Обратитесь к администратору.")
         return
     
     await update.message.reply_text(
@@ -164,7 +179,7 @@ async def button_click(update: Update, context):
         context.user_data.clear()
     
     elif data == "my_posts":
-        conn = sqlite3.connect('bot.db')
+        conn = sqlite3.connect('bot.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('''
             SELECT p.content, p.schedule_time, c.channel_name 
@@ -191,6 +206,7 @@ async def button_click(update: Update, context):
 async def handle_message(update: Update, context):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Доступ запрещен")
         return
     
     message = update.message
@@ -219,7 +235,7 @@ async def handle_message(update: Update, context):
 
 # Публикация постов
 async def publish_posts(context):
-    conn = sqlite3.connect('bot.db')
+    conn = sqlite3.connect('bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
     cursor.execute("SELECT id, content, channel_id FROM posts WHERE status = 'scheduled' AND schedule_time <= datetime('now')")
@@ -230,14 +246,17 @@ async def publish_posts(context):
             await context.bot.send_message(chat_id=channel_id, text=content)
             cursor.execute("UPDATE posts SET status = 'published' WHERE id = ?", (post_id,))
             conn.commit()
+            logger.info(f"Пост {post_id} опубликован в канале {channel_id}")
         except Exception as e:
-            print(f"Ошибка публикации: {e}")
+            logger.error(f"Ошибка публикации поста {post_id}: {e}")
     
     conn.close()
 
 def main():
+    # Инициализация базы данных
     init_db()
     
+    # Создание приложения
     app = Application.builder().token(BOT_TOKEN).build()
     
     # Обработчики
@@ -246,9 +265,13 @@ def main():
     app.add_handler(MessageHandler(filters.ALL, handle_message))
     
     # Публикация постов каждую минуту
-    app.job_queue.run_repeating(publish_posts, interval=60, first=10)
+    if hasattr(app, 'job_queue') and app.job_queue is not None:
+        app.job_queue.run_repeating(publish_posts, interval=60, first=10)
+        logger.info("JobQueue запущен")
+    else:
+        logger.warning("JobQueue недоступен")
     
-    print("Бот запущен!")
+    logger.info("Бот запущен!")
     app.run_polling()
 
 if __name__ == "__main__":
